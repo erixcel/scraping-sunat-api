@@ -9,8 +9,6 @@ import re
 
 app = Flask(__name__)
 
-
-
 def ruc_valid(ruc:str):
     if len(ruc) != 11:
         return False
@@ -24,7 +22,7 @@ def clean_text(text:str):
     text = ' '.join(text.replace("\n", " ").replace("\t", " ").split())
     return text
   
-def get_ruc_data(RUC: str):
+def get_data_by_ruc(RUC: str):
     data = {
         "estado": False,
         'mensaje': 'No encontrado',
@@ -143,10 +141,72 @@ def get_ruc_data(RUC: str):
                 }
     return data
 
+def get_quantity_workers_by_ruc(RUC: str):
+
+    data = {
+        "estado": False,
+        'mensaje': 'No encontrado',
+        "resultado": []
+    }
+
+    if(ruc_valid(RUC)):
+        with sync_playwright() as playwright:
+            ff = playwright.firefox
+            browser = ff.launch(headless=True)
+            page = browser.new_page()
+            try:
+                page.goto("https://e-consultaruc.sunat.gob.pe/cl-ti-itmrconsruc/FrameCriterioBusquedaWeb.jsp")
+                expect(page).to_have_title("SUNAT - Consulta Ruc")
+                page.locator("#txtRuc").fill(RUC)
+                with page.expect_navigation(timeout=3_000):
+                    page.locator("#btnAceptar").click()
+                expect(page.locator("button.btnInfHis")).to_have_text("Información Histórica",timeout=1_000)
+                with page.expect_navigation(timeout=3_000):
+                    page.locator("button.btnInfNumTra").click()
+                expect(page.locator("span.glyphicon.glyphicon-envelope")).to_be_visible(timeout=1_000)
+                html_raw = page.content()
+            except PlaywrightTimeoutError:
+                print("first error")
+                html_raw = ""
+            except AssertionError:
+                print("second error")
+                html_raw = ""
+            browser.close()
+
+            if(html_raw):
+                soup = BeautifulSoup(html_raw, "lxml")
+                table = soup.find('table', {'class': 'table'})
+                data = {
+                    "estado": True,
+                    'mensaje': 'Encontrado',
+                    "resultado": []
+                }
+                if table is not None:
+                    array = []
+                    for row in table.find_all('tr'):
+                        if isinstance(row, Tag):
+                            cols = row.find_all('td')
+                            cols = [col.text.strip() if isinstance(col, Tag) else None for col in cols]
+                        if len(cols) == 4:
+                            row_data = {
+                                'periodo': cols[0],
+                                'num_trabajadores': cols[1],
+                                'num_pensionistas': cols[2],
+                                'num_prestadores': cols[3]
+                            }
+                            array.append(row_data)
+                    data['resultado'] = array
+    return data
+
 @app.route('/consultar/ruc', methods=['GET'])
-def get_ruc():
+def get_data_ruc():
     ruc = str(request.args.get('number', default = 0, type = int))
-    return get_ruc_data(ruc)
+    return get_data_by_ruc(ruc)
+
+@app.route('/consultar/trabajadores/ruc', methods=['GET'])
+def get_quantity_workers_ruc():
+    ruc = str(request.args.get('number', default = 0, type = int))
+    return get_quantity_workers_by_ruc(ruc)
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0')
